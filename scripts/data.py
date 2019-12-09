@@ -21,7 +21,7 @@ def create_audio_data(audio_files: List[str], sample_rate: int, outfile: str, mo
 
     records = np.stack(records, axis=0)
     print(">>> finished loading all audios and create an array of", records.shape)
-    np.savez_compressed(outfile, audios=audios, audio_files=audio_files)
+    np.savez_compressed(outfile, audios=records, audio_files=audio_files)
 
 
 if __name__ == "__main__":

@@ -50,6 +50,6 @@ if __name__ == "__main__":
         audio_files = args.audio_files
     else:
         audio_files = str(DATA_DIR / args.audio_files)
-    audio_files = sorted(glob.glob(audio_files))[:10]
+    audio_files = sorted(glob.glob(audio_files))
 
     create_audio_data(audio_files, args.sample_rate, args.output_file, max_seconds=args.max_seconds)

@@ -10,6 +10,8 @@ from __future__ import print_function
 import argparse
 import glob
 import json
+from dataclasses import dataclass
+
 import numpy as np
 import os
 import sys
@@ -23,14 +25,29 @@ from tqdm.auto import tqdm
 
 from wavenet_tf import WaveNetModel, optimizer_factory
 
+
 ROOT_DIR = Path(os.path.abspath(__file__)).parent.parent
+
+
+@dataclass
+class TrainParams:
+    data_dir: str = str(ROOT_DIR / 'data' / 'fma_small_25_16000')
+    log_dir: str = str(ROOT_DIR / "logdir")
+    checkpoint_every: int = 1000
+    num_steps: int = int(1e5)
+    batch_size: int = 1
+    sample_size: int = 100000
+    learning_rate: float = 1e-4
+    max_to_keep: int = 5
+    store_metadata: bool = False
+    optimizer: str = 'adam'
+    epsilon: float = 0.001
+    momentum: float = 0.9
+    l2_regularization_strength: float = 0.0
+    histograms: bool = False
 
 BATCH_SIZE = 1
 DATA_DIRECTORY = str(ROOT_DIR / 'data' / 'fma_small_25_16000')
-LOGDIR_ROOT = str(ROOT_DIR / 'logdir')
-CHECKPOINT_EVERY = 8000
-NUM_STEPS = int(1e5)
-LEARNING_RATE = 1e-3
 WAVENET_PARAMS = str(ROOT_DIR / 'data' / 'tf_wavenet_params.json')
 STARTED_DATESTRING = "{0:%Y-%m-%dT%H-%M-%S}".format(datetime.now())
 SAMPLE_SIZE = 100000
@@ -40,76 +57,6 @@ EPSILON = 0.001
 MOMENTUM = 0.9
 MAX_TO_KEEP = 5
 METADATA = False
-
-
-def get_arguments():
-    def _str_to_bool(s):
-        """Convert string to bool (in argparse context)."""
-        if s.lower() not in ['true', 'false']:
-            raise ValueError('Argument needs to be a '
-                             'boolean, got {}'.format(s))
-        return {'true': True, 'false': False}[s.lower()]
-
-    parser = argparse.ArgumentParser(description='WaveNet example network')
-    parser.add_argument('--batch_size', type=int, default=BATCH_SIZE,
-                        help='How many wav files to process at once. Default: ' + str(BATCH_SIZE) + '.')
-    parser.add_argument('--data_dir', type=str, default=DATA_DIRECTORY,
-                        help='The directory containing the VCTK corpus.')
-    parser.add_argument('--store_metadata', type=bool, default=METADATA,
-                        help='Whether to store advanced debugging information '
-                             '(execution time, memory consumption) for use with '
-                             'TensorBoard. Default: ' + str(METADATA) + '.')
-    parser.add_argument('--logdir', type=str, default=None,
-                        help='Directory in which to store the logging '
-                             'information for TensorBoard. '
-                             'If the model already exists, it will restore '
-                             'the state and will continue training. '
-                             'Cannot use with --logdir_root and --restore_from.')
-    parser.add_argument('--logdir_root', type=str, default=None,
-                        help='Root directory to place the logging '
-                             'output and generated model. These are stored '
-                             'under the dated subdirectory of --logdir_root. '
-                             'Cannot use with --logdir.')
-    parser.add_argument('--restore_from', type=str, default=None,
-                        help='Directory in which to restore the model from. '
-                             'This creates the new model under the dated directory '
-                             'in --logdir_root. '
-                             'Cannot use with --logdir.')
-    parser.add_argument('--checkpoint_every', type=int,
-                        default=CHECKPOINT_EVERY,
-                        help='How many steps to save each checkpoint after. Default: ' + str(CHECKPOINT_EVERY) + '.')
-    parser.add_argument('--num_steps', type=int, default=NUM_STEPS,
-                        help='Number of training steps. Default: ' + str(NUM_STEPS) + '.')
-    parser.add_argument('--learning_rate', type=float, default=LEARNING_RATE,
-                        help='Learning rate for training. Default: ' + str(LEARNING_RATE) + '.')
-    parser.add_argument('--wavenet_params', type=str, default=WAVENET_PARAMS,
-                        help='JSON file with the network parameters. Default: ' + WAVENET_PARAMS + '.')
-    parser.add_argument('--sample_size', type=int, default=SAMPLE_SIZE,
-                        help='Concatenate and cut audio samples to this many '
-                             'samples. Default: ' + str(SAMPLE_SIZE) + '.')
-    parser.add_argument('--l2_regularization_strength', type=float,
-                        default=L2_REGULARIZATION_STRENGTH,
-                        help='Coefficient in the L2 regularization. '
-                             'Default: False')
-    parser.add_argument('--silence_threshold', type=float,
-                        default=SILENCE_THRESHOLD,
-                        help='Volume threshold below which to trim the start '
-                             'and the end from the training set samples. Default: ' + str(SILENCE_THRESHOLD) + '.')
-    parser.add_argument('--optimizer', type=str, default='adam',
-                        choices=optimizer_factory.keys(),
-                        help='Select the optimizer specified by this option. Default: adam.')
-    parser.add_argument('--momentum', type=float,
-                        default=MOMENTUM, help='Specify the momentum to be '
-                                               'used by sgd or rmsprop optimizer. Ignored by the '
-                                               'adam optimizer. Default: ' + str(MOMENTUM) + '.')
-    parser.add_argument('--histograms', type=_str_to_bool, default=False,
-                        help='Whether to store histogram summaries. Default: False')
-    parser.add_argument('--gc_channels', type=int, default=None,
-                        help='Number of global condition channels. Default: None. Expecting: Int')
-    parser.add_argument('--max_checkpoints', type=int, default=MAX_TO_KEEP,
-                        help='Maximum amount of checkpoints that will be kept alive. Default: '
-                             + str(MAX_TO_KEEP) + '.')
-    return parser.parse_args()
 
 
 def get_dataloader(args):
@@ -128,9 +75,7 @@ def get_dataloader(args):
     return gen, approx_examples
 
 
-def main():
-    args = get_arguments()
-
+def train(args: TrainParams, model_params):
     try:
         directories = validate_directories(args)
     except ValueError as e:
@@ -300,15 +245,15 @@ def get_default_logdir(logdir_root):
     return logdir
 
 
-def validate_directories(args):
+def validate_directories(args: TrainParams):
     """Validate and arrange directory related arguments."""
 
     # Validation
-    if args.logdir and args.logdir_root:
+    if args.log_dir and args.logdir_root:
         raise ValueError("--logdir and --logdir_root cannot be "
                          "specified at the same time.")
 
-    if args.logdir and args.restore_from:
+    if args.log_dir and args.restore_from:
         raise ValueError(
             "--logdir and --restore_from cannot be specified at the same "
             "time. This is to keep your previous model from unexpected "
@@ -323,7 +268,7 @@ def validate_directories(args):
     if logdir_root is None:
         logdir_root = LOGDIR_ROOT
 
-    logdir = args.logdir
+    logdir = args.log_dir
     if logdir is None:
         logdir = get_default_logdir(logdir_root)
         print('Using default logdir: {}'.format(logdir))
@@ -342,4 +287,4 @@ def validate_directories(args):
 
 
 if __name__ == '__main__':
-    main()
+    train()

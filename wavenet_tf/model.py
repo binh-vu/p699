@@ -660,12 +660,12 @@ class WaveNetModel(object):
                                            [-1, self.quantization_channels])
                 prediction = tf.reshape(raw_output,
                                         [-1, self.quantization_channels])
-                loss = tf.nn.softmax_cross_entropy_with_logits(
+                loss = tf.nn.softmax_cross_entropy_with_logits_v2(
                     logits=prediction,
                     labels=target_output)
                 reduced_loss = tf.reduce_mean(loss)
 
-                tf.summary.scalar('loss', reduced_loss)
+                tf.compat.v1.summary.scalar('loss', reduced_loss)
 
                 if l2_regularization_strength is None:
                     return reduced_loss
@@ -679,8 +679,8 @@ class WaveNetModel(object):
                     total_loss = (reduced_loss +
                                   l2_regularization_strength * l2_loss)
 
-                    tf.summary.scalar('l2_loss', l2_loss)
-                    tf.summary.scalar('total_loss', total_loss)
+                    tf.compat.v1.summary.scalar('l2_loss', l2_loss)
+                    tf.compat.v1.summary.scalar('total_loss', total_loss)
 
                     return total_loss
 

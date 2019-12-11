@@ -4,7 +4,7 @@ import tensorflow as tf
 
 
 def create_adam_optimizer(learning_rate, momentum):
-    return tf.train.AdamOptimizer(learning_rate=learning_rate,
+    return tf.compat.v1.train.AdamOptimizer(learning_rate=learning_rate,
                                   epsilon=1e-4)
 
 
@@ -40,7 +40,7 @@ def batch_to_time(value, dilation, name=None):
         prepared = tf.reshape(value, [dilation, -1, shape[2]])
         transposed = tf.transpose(prepared, perm=[1, 0, 2])
         return tf.reshape(transposed,
-                          [tf.div(shape[0], dilation), -1, shape[2]])
+                          [tf.compat.v1.divide(shape[0], dilation), -1, shape[2]])
 
 
 def causal_conv(value, filter_, dilation, name='causal_conv'):
@@ -64,15 +64,20 @@ def causal_conv(value, filter_, dilation, name='causal_conv'):
 def mu_law_encode(audio, quantization_channels):
     '''Quantizes waveform amplitudes.'''
     with tf.name_scope('encode'):
-        mu = tf.to_float(quantization_channels - 1)
+        # @update change to_float to tf.cast
+        # mu = tf.to_float(quantization_channels - 1)
+        mu = tf.cast(quantization_channels - 1, tf.float32)
         # Perform mu-law companding transformation (ITU-T, 1988).
         # Minimum operation is here to deal with rare large amplitudes caused
         # by resampling.
         safe_audio_abs = tf.minimum(tf.abs(audio), 1.0)
-        magnitude = tf.log1p(mu * safe_audio_abs) / tf.log1p(mu)
+        magnitude = tf.math.log1p(mu * safe_audio_abs) / tf.math.log1p(mu)
         signal = tf.sign(audio) * magnitude
         # Quantize signal to the specified number of levels.
-        return tf.to_int32((signal + 1) / 2 * mu + 0.5)
+
+        # @update change to tf.cast
+        # return tf.to_int32((signal + 1) / 2 * mu + 0.5)
+        return tf.cast((signal + 1) / 2 * mu + 0.5, tf.int32)
 
 
 def mu_law_decode(output, quantization_channels):

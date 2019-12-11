@@ -13,7 +13,7 @@ tqdm = "*"
 soundfile = "*"
 torch = "*"
 torchvision = "*"
-tensorflow = "==1.15"
+ujson = "*"
 
 [requires]
 python_version = "3.7"

@@ -4,4 +4,4 @@ set -e
 
 export PYTHONPATH=$(pwd)
 
-python src/train_tfwavenet.py
+python wavenet_tf/train.py

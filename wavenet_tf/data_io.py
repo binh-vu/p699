@@ -1,0 +1,17 @@
+def get_train_dataset(pattern: str, sample_size: int):
+    files = sorted(glob.glob(pattern))
+    n_examples = 0
+    for file in files:
+        data = np.load(file, mmap_mode='r')
+        n_examples += data['audios'].shape[0]
+
+    def generator():
+        for file in files:
+            data = np.load(file)
+            audios = data['audios']
+            audios = audios[:, :sample_size].reshape(audios.shape[0], -1, 1)
+            for i in range(len(audios)):
+                yield audios[i]
+
+    dataset = tf.data.Dataset.from_generator(generator, tf.float32, (sample_size, 1))
+    return dataset, n_examples

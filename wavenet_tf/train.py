@@ -44,6 +44,7 @@ class TrainParams:
     l2_regularization_strength: float = 0.0
     max_checkpoints: int = 5
 
+
 def train(args: TrainParams, net, optimizer):
     # Load raw waveform from VCTK corpus.
     with tf.name_scope('create_inputs'):

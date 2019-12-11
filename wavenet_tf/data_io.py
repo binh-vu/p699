@@ -1,9 +1,13 @@
+import glob, numpy as np, tensorflow as tf
+
+
 def get_train_dataset(pattern: str, sample_size: int):
     files = sorted(glob.glob(pattern))
     n_examples = 0
+
     for file in files:
         data = np.load(file, mmap_mode='r')
-        n_examples += data['audios'].shape[0]
+        n_examples += data['audio_files'].shape[0]
 
     def generator():
         for file in files:

@@ -24,10 +24,11 @@ from tensorflow.python.client import timeline
 from tqdm.auto import tqdm
 
 from wavenet_tf import WaveNetModel, optimizer_factory
-
+from wavenet_tf.data_io import get_train_dataset
 
 ROOT_DIR = Path(os.path.abspath(__file__)).parent.parent
 STARTED_DATESTRING = "{0:%Y-%m-%dT%H-%M-%S}".format(datetime.now())
+
 
 @dataclass
 class TrainParams:
@@ -40,35 +41,15 @@ class TrainParams:
     learning_rate: float = 1e-4
     max_to_keep: int = 5
     store_metadata: bool = False
-    optimizer: str = 'adam'
-    epsilon: float = 0.001
-    momentum: float = 0.9
     l2_regularization_strength: float = 0.0
-
-
-def get_dataloader(args):
-    files = sorted(glob.glob(os.path.join(args.data_dir, "*.npz")))
-    sample_size = args.sample_size
-
-    def gen():
-        for file in files:
-            data = np.load(file)
-            audios = data['audios']
-            audios = audios[:, :sample_size].reshape(audios.shape[0], -1, 1)
-            for i in range(len(audios)):
-                yield audios[i]
-
-    approx_examples = len(files) * 100
-    return gen, approx_examples
-
+    max_checkpoints: int = 5
 
 def train(args: TrainParams, net, optimizer):
     # Load raw waveform from VCTK corpus.
     with tf.name_scope('create_inputs'):
         # Allow silence trimming to be skipped by specifying a threshold near
-        generator, approx_n_examples = get_dataloader(args)
-        approx_epoch_size = approx_n_examples // args.batch_size
-        dataset = tf.data.Dataset.from_generator(generator, tf.float32, (args.sample_size, 1))
+        dataset, n_examples = get_train_dataset(os.path.join(args.data_dir, "*.npz"), args.sample_size)
+        epoch_size = n_examples // args.batch_size
         dataset = dataset.repeat().batch(args.batch_size)
 
         iterator = tf.compat.v1.data.make_initializable_iterator(dataset)
@@ -79,9 +60,6 @@ def train(args: TrainParams, net, optimizer):
     loss = net.loss(input_batch=audio_batch,
                     global_condition_batch=None,
                     l2_regularization_strength=args.l2_regularization_strength)
-    optimizer = optimizer_factory[args.optimizer](
-        learning_rate=args.learning_rate,
-        momentum=args.momentum)
     trainable = tf.compat.v1.trainable_variables()
     optim = optimizer.minimize(loss, var_list=trainable)
 
@@ -119,7 +97,7 @@ def train(args: TrainParams, net, optimizer):
         pbar = tqdm(
             total=total,
             initial=saved_global_step + 1,
-            desc=f'train (epoch-size={approx_epoch_size}, #epoch={total // approx_epoch_size})')
+            desc=f'train (epoch-size={epoch_size}, #epoch={total // epoch_size})')
 
         for step in range(saved_global_step + 1, args.num_steps):
             if args.store_metadata and step % 50 == 0:
@@ -143,7 +121,7 @@ def train(args: TrainParams, net, optimizer):
                 writer.add_summary(summary, step)
 
             pbar.update(1)
-            pbar.set_postfix(step=step, loss=loss_value, epoch=step // approx_epoch_size)
+            pbar.set_postfix(step=step, loss=loss_value, epoch=step // epoch_size)
 
             if step > 0 and step % args.checkpoint_every == 0:
                 save(saver, sess, args.log_dir, step)
@@ -196,4 +174,25 @@ def get_default_logdir(logdir_root):
 
 
 if __name__ == '__main__':
-    train()
+    args = TrainParams()
+    with open('./data/tf_wavenet_params.json', 'r') as f:
+        wavenet_params = json.load(f)
+
+    model = WaveNetModel(
+        batch_size=args.batch_size,
+        dilations=wavenet_params["dilations"],
+        filter_width=wavenet_params["filter_width"],
+        residual_channels=wavenet_params["residual_channels"],
+        dilation_channels=wavenet_params["dilation_channels"],
+        skip_channels=wavenet_params["skip_channels"],
+        quantization_channels=wavenet_params["quantization_channels"],
+        use_biases=wavenet_params["use_biases"],
+        scalar_input=wavenet_params["scalar_input"],
+        initial_filter_width=wavenet_params["initial_filter_width"],
+        histograms=False,
+        global_condition_channels=None,
+        global_condition_cardinality=None)
+
+    optimizer = tf.compat.v1.train.AdamOptimizer(learning_rate=1e-4,
+                                     epsilon=1e-4)
+    train(args, model, optimizer)

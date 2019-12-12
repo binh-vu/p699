@@ -18,11 +18,19 @@ loss_fn = torch.nn.CrossEntropyLoss(reduction='mean')
 n_classes = 256
 
 
-def train_one_step(model, optimizer, example, global_step):
+def train_one_step(model, optimizer, example, global_step, device):
     global loss_fn, n_classes
 
     # y: BatchSize x Time, c: BatchSize x Channels x Time
-    y, c = example
+    if len(example) > 1:
+        y, c = example
+        y = y.to(device)
+        c = c.to(device)
+    else:
+        y = example
+        y = y.to(device)
+        c = None
+
     x = F.one_hot(y, num_classes=n_classes).float()
     # change to BatchSize x Channels x Time
     x = torch.transpose(x, 2, 1)
@@ -43,6 +51,7 @@ def train_one_step(model, optimizer, example, global_step):
 def train(train_dataset,
           model,
           optimizer,
+          device,
           train_one_step,
           epoch_seeds: List[int],
           global_step: int,
@@ -79,7 +88,7 @@ def train(train_dataset,
             global_step += 1
             pbar.update(1)
 
-            loss = train_one_step(model, optimizer, train_example, global_step)
+            loss = train_one_step(model, optimizer, train_example, global_step, device)
             # loss = model.loss(x, global_step)
             # optimizer.zero_grad()
             # loss['loss'].backward()

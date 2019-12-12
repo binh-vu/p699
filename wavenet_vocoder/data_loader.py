@@ -45,9 +45,13 @@ def load_data(npz_files: List[str], n_split=1):
     return xquants, xspects
 
 
-def get_data_loader(npz_files: str, batch_size, shuffle: bool, pin_memory=True, n_split=1):
+def get_data_loader(npz_files: str, batch_size, shuffle: bool, pin_memory=True, no_local_conditioning=False, n_split=1):
     x, c = load_data(npz_files, n_split)
-    return torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x, c),
+    if no_local_conditioning:
+        args = (x, c)
+    else:
+        args = (x,)
+    return torch.utils.data.DataLoader(torch.utils.data.TensorDataset(*args),
                                        batch_size=batch_size,
                                        shuffle=shuffle,
                                        pin_memory=pin_memory)

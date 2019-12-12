@@ -7,7 +7,7 @@ from tqdm.auto import tqdm
 def load_data(npz_files: List[str], n_split=1):
     xspects = []
     xquants = []
-    
+
     for file in npz_files:
         data = np.load(file)
 
@@ -20,8 +20,8 @@ def load_data(npz_files: List[str], n_split=1):
             quant_chunk_size = xquant.shape[1] // n_split
 
             for i in range(n_split):
-                xspect_chunk = xspect[:, i*spect_chunk_size:(i+1)*spect_chunk_size]
-                xquant_chunk = xquant[:, i*quant_chunk_size:(i+1)*quant_chunk_size]
+                xspect_chunk = xspect[:, i * spect_chunk_size:(i + 1) * spect_chunk_size]
+                xquant_chunk = xquant[:, i * quant_chunk_size:(i + 1) * quant_chunk_size]
 
                 xspects.append(xspect_chunk)
                 xquants.append(xquant_chunk)
@@ -36,7 +36,7 @@ def load_data(npz_files: List[str], n_split=1):
 
     # local condition would be xspects
     # convert to torch and make it as BatchSize x Channel x Times
-    xspects = torch.from_numpy(xspects).permute((0, 2, 1))
+    xspects = torch.transpose(torch.from_numpy(xspects), 2, 1)
     # we still keep it as BatchSize x Times
     xquants = torch.from_numpy(xquants)
 
@@ -47,13 +47,11 @@ def load_data(npz_files: List[str], n_split=1):
 
 def get_data_loader(npz_files: str, batch_size, shuffle: bool, pin_memory=True, n_split=1):
     x, c = load_data(npz_files, n_split)
-    return torch.utils.data.DataLoader(
-        torch.utils.data.TensorDataset(x, c),
-        batch_size=batch_size,
-        shuffle=shuffle,
-        pin_memory=pin_memory
-    )
-    
+    return torch.utils.data.DataLoader(torch.utils.data.TensorDataset(x, c),
+                                       batch_size=batch_size,
+                                       shuffle=shuffle,
+                                       pin_memory=pin_memory)
+
 
 if __name__ == "__main__":
     load_data(sorted(glob.glob("../data/fma_tiny*/processed/*.npz")), 2)

@@ -1,14 +1,22 @@
-import librosa, glob, argparse, os, numpy as np
-from tqdm.auto import tqdm
-from config import *
-from typing import *
 from multiprocessing.pool import Pool
+from typing import *
+
+import argparse
+import glob
+import librosa
+import numpy as np
+from tqdm.auto import tqdm
+
+from config import *
 
 
-def create_audio_data(audio_files: List[str], sample_rate: int, outfile: str, mono=True, max_seconds: Optional[int]=None, show_progress: bool=True):
+def create_audio_data(audio_files: List[str], sample_rate: int, outfile: str, mono=True,
+                      max_seconds: Optional[int] = None, show_progress: bool = True):
+    Path(outfile).parent.mkdir(exist_ok=True, parents=True)
+
     if max_seconds is not None:
         max_seconds = sample_rate * max_seconds
-    
+
     length = -1
     records = []
     if show_progress:
@@ -16,42 +24,46 @@ def create_audio_data(audio_files: List[str], sample_rate: int, outfile: str, mo
     else:
         iter_audio_files = iter(audio_files)
 
+    record_names = []
     for audio_file in iter_audio_files:
         try:
             record, _ = librosa.load(audio_file, sr=sample_rate, mono=mono)
         except:
             print(f"\tInvalid file: {audio_file}")
             continue
-    
+
         record = record[:max_seconds]
         if length == -1:
             length = record.shape[0]
         else:
             # ignore audios less than the length
             if length != record.shape[0]:
-                print(f"\tIgnore file due to length is too short {record.shape[0]} (should be {length}). File: {audio_file}")
+                print(
+                    f"\tIgnore file due to length is too short {record.shape[0]} (should be {length}). File: {audio_file}")
                 continue
                 # raise Exception(f"Audio should be in the same shape for fast processing. Try to change the max_seconds. Current length: {record.shape[0]}, previous length: {length}")
         records.append(record)
+        record_names.append(audio_file)
 
     records = np.stack(records, axis=0)
     print(">>> finished loading all audios and create an array of", records.shape)
-    np.savez_compressed(outfile, audios=records, audio_files=audio_files)
+    np.savez_compressed(outfile, audios=records, audio_files=record_names)
 
 
 def wrapped_create_audio_data(args):
     return create_audio_data(*args)
 
 
-def parallel_create_audio_data(audio_files: List[str], sample_rate: int, outfile: str, mono=True, max_seconds: Optional[int]=None):
+def parallel_create_audio_data(audio_files: List[str], sample_rate: int, outfile: str, mono=True,
+                               max_seconds: Optional[int] = None):
     fn_args = []
     batch_size = 100
 
     for i in range(0, len(audio_files), batch_size):
-        batch = audio_files[i:i+batch_size]
+        batch = audio_files[i:i + batch_size]
         if len(batch) == 0:
             continue
-        
+
         batch_outfile = str(Path(outfile).parent / f"{Path(outfile).stem}.chunk.{i:05}.npz")
         if os.path.exists(batch_outfile):
             continue
@@ -64,7 +76,7 @@ def parallel_create_audio_data(audio_files: List[str], sample_rate: int, outfile
             max_seconds,
             False
         ))
-    
+
     pool = Pool()
     for _ in tqdm(pool.imap_unordered(wrapped_create_audio_data, fn_args), total=len(fn_args)):
         pass
@@ -74,7 +86,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--audio_files",
                         "-i",
-                        default="fma-small/*/*.mp3",
+                        default="fma_small/*/*.mp3",
                         help="glob that find all audio files")
     parser.add_argument("--sample_rate",
                         "-r",

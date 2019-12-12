@@ -1,0 +1,191 @@
+import torch, numpy as np
+from wavenet_vocoder.util import is_mulaw_quantize
+from nnmnkwii import preprocessing as P
+
+
+class DataLoader:
+
+    def __init__(self, input_type, cin_pad, cin_channels, gin_channels, sample_rate, window_length_ms, max_time_steps,
+                 quantize_channels):
+        self.quantize_channels = quantize_channels
+        self.input_type = input_type
+        self.cin_pad = cin_pad
+        self.window_length_ms = window_length_ms
+        n_fft = int(window_length_ms * sample_rate / 1000)
+        self.hop_size = n_fft // 4
+        self.max_time_steps = max_time_steps
+        self.sample_rate = sample_rate
+        self.gin_channels = gin_channels
+        self.cin_channels = cin_channels
+
+    def get_data_loader(self):
+        pass
+
+    def collate_fn(self, batch):
+        """Create batch
+
+        Args:
+            batch(tuple): List of tuples
+                - x[0] (ndarray,int) : list of (T,)
+                - x[1] (ndarray,int) : list of (T, D)
+                - x[2] (ndarray,int) : list of (1,), speaker id
+        Returns:
+            tuple: Tuple of batch
+                - x (FloatTensor) : Network inputs (B, C, T)
+                - y (LongTensor)  : Network targets (B, T, 1)
+        """
+
+        local_conditioning = len(batch[0]) >= 2 and self.cin_channels > 0
+        global_conditioning = len(batch[0]) >= 3 and self.gin_channels > 0
+
+        # Time resolution adjustment
+        if local_conditioning:
+            new_batch = []
+            for idx in range(len(batch)):
+                x, c, g = batch[idx]
+                # always use cnn upsampling to adjust the local conditioning features
+                assert_ready_for_upsampling(x, c, self.hop_size, cin_pad=0)
+                if self.max_time_steps is not None:
+                    max_steps = ensure_divisible(self.max_time_steps, self.hop_size, True)
+                    if len(x) > max_steps:
+                        # adjust again if users want to change the time steps
+                        max_time_frames = max_steps // self.hop_size
+                        s = np.random.randint(self.cin_pad, len(c) - max_time_frames - self.cin_pad)
+                        ts = s * self.hop_size
+                        x = x[ts:ts + self.hop_size * max_time_frames]
+                        c = c[s - self.cin_pad:s + max_time_frames + self.cin_pad, :]
+                        assert_ready_for_upsampling(x, c, self.hop_size, cin_pad=self.cin_pad)
+                new_batch.append((x, c, g))
+            batch = new_batch
+        else:
+            new_batch = []
+            for idx in range(len(batch)):
+                x, c, g = batch[idx]
+                if self.max_time_steps is not None and len(x) > self.max_time_steps:
+                    s = np.random.randint(0, len(x) - self.max_time_steps)
+                    if local_conditioning:
+                        x, c = x[s:s + self.max_time_steps], c[s:s + self.max_time_steps, :]
+                    else:
+                        x = x[s:s + self.max_time_steps]
+                new_batch.append((x, c, g))
+            batch = new_batch
+
+        # Lengths
+        input_lengths = [len(x[0]) for x in batch]
+        max_input_len = max(input_lengths)
+
+        # (B, T, C)
+        # pad for time-axis
+        if is_mulaw_quantize(self.input_type):
+            padding_value = P.mulaw_quantize(0, mu=self.quantize_channels - 1)
+            x_batch = np.array([_pad_2d(to_categorical(
+                x[0], num_classes=self.quantize_channels),
+                max_input_len, 0, padding_value) for x in batch], dtype=np.float32)
+        else:
+            x_batch = np.array([_pad_2d(x[0].reshape(-1, 1), max_input_len)
+                                for x in batch], dtype=np.float32)
+        assert len(x_batch.shape) == 3
+
+        # (B, T)
+        if is_mulaw_quantize(self.input_type):
+            padding_value = P.mulaw_quantize(0, mu=self.quantize_channels - 1)
+            y_batch = np.array([_pad(x[0], max_input_len, constant_values=padding_value)
+                                for x in batch], dtype=np.int)
+        else:
+            y_batch = np.array([_pad(x[0], max_input_len) for x in batch], dtype=np.float32)
+        assert len(y_batch.shape) == 2
+
+        # (B, T, D)
+        if local_conditioning:
+            max_len = max([len(x[1]) for x in batch])
+            c_batch = np.array([_pad_2d(x[1], max_len) for x in batch], dtype=np.float32)
+            assert len(c_batch.shape) == 3
+            # (B x C x T)
+            c_batch = torch.FloatTensor(c_batch).transpose(1, 2).contiguous()
+        else:
+            c_batch = None
+
+        if global_conditioning:
+            g_batch = torch.LongTensor([x[2] for x in batch])
+        else:
+            g_batch = None
+
+        # Covnert to channel first i.e., (B, C, T)
+        x_batch = torch.FloatTensor(x_batch).transpose(1, 2).contiguous()
+        # Add extra axis
+        if is_mulaw_quantize(self.input_type):
+            y_batch = torch.LongTensor(y_batch).unsqueeze(-1).contiguous()
+        else:
+            y_batch = torch.FloatTensor(y_batch).unsqueeze(-1).contiguous()
+
+        input_lengths = torch.LongTensor(input_lengths)
+
+        return x_batch, y_batch, c_batch, g_batch, input_lengths
+
+
+def assert_ready_for_upsampling(x, c, hop_size, cin_pad):
+    assert len(x) == (len(c) - 2 * cin_pad) * hop_size
+
+
+def ensure_divisible(length, divisible_by=256, lower=True):
+    if length % divisible_by == 0:
+        return length
+    if lower:
+        return length - length % divisible_by
+    else:
+        return length + (divisible_by - length % divisible_by)
+
+
+def to_categorical(y, num_classes=None, dtype='float32'):
+    """Converts a class vector (integers) to binary class matrix.
+    E.g. for use with categorical_crossentropy.
+    # Arguments
+        y: class vector to be converted into a matrix
+            (integers from 0 to num_classes).
+        num_classes: total number of classes.
+        dtype: The data type expected by the input, as a string
+            (`float32`, `float64`, `int32`...)
+    # Returns
+        A binary matrix representation of the input. The classes axis
+        is placed last.
+    # Example
+    ```python
+    # Consider an array of 5 labels out of a set of 3 classes {0, 1, 2}:
+    > labels
+    array([0, 2, 1, 2, 0])
+    # `to_categorical` converts this into a matrix with as many
+    # columns as there are classes. The number of rows
+    # stays the same.
+    > to_categorical(labels)
+    array([[ 1.,  0.,  0.],
+           [ 0.,  0.,  1.],
+           [ 0.,  1.,  0.],
+           [ 0.,  0.,  1.],
+           [ 1.,  0.,  0.]], dtype=float32)
+    ```
+    """
+
+    y = np.array(y, dtype='int')
+    input_shape = y.shape
+    if input_shape and input_shape[-1] == 1 and len(input_shape) > 1:
+        input_shape = tuple(input_shape[:-1])
+    y = y.ravel()
+    if not num_classes:
+        num_classes = np.max(y) + 1
+    n = y.shape[0]
+    categorical = np.zeros((n, num_classes), dtype=dtype)
+    categorical[np.arange(n), y] = 1
+    output_shape = input_shape + (num_classes,)
+    categorical = np.reshape(categorical, output_shape)
+    return categorical
+
+
+def _pad_2d(x, max_len, b_pad=0, constant_values=0):
+    x = np.pad(x, [(b_pad, max_len - len(x) - b_pad), (0, 0)],
+               mode="constant", constant_values=constant_values)
+    return x
+
+
+def _pad(seq, max_len, constant_values=0):
+    return np.pad(seq, (0, max_len - len(seq)),
+                  mode='constant', constant_values=constant_values)

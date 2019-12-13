@@ -61,7 +61,7 @@ hparams = HParams(
 
     # initial learning rate
     lr=1e-3,
-    n_epoches=50,
+    n_epoches=10,
     n_split=8,
     max_time_steps=None,
 )

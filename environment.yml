@@ -1,0 +1,16 @@
+name: p699
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.7
+  - pip
+  - scipy
+  - numpy
+  - pytorch
+  - torchvision
+  - pip:
+    - ujson
+    - tqdm
+    - pandas
+    - matplotlib

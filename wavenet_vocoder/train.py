@@ -1,4 +1,6 @@
 import os, numpy as np, random, torch, torchvision, pickle
+from itertools import chain
+
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 from typing import *
@@ -14,11 +16,20 @@ def set_seed(seed):
     np.random.seed(seed)
 
 
+def noam_learning_rate_decay(init_lr, global_step, warmup_steps=4000):
+    # Noam scheme from tensor2tensor:
+    warmup_steps = float(warmup_steps)
+    step = global_step + 1.
+    lr = init_lr * warmup_steps**0.5 * np.minimum(
+        step * warmup_steps**-1.5, step**-0.5)
+    return lr
+
+
 loss_fn = torch.nn.CrossEntropyLoss(reduction='mean')
 n_classes = 256
 
 
-def train_one_step(model, optimizer, example, global_step, device):
+def train_one_step(model, optimizer, example, global_step, device, init_lr):
     global loss_fn, n_classes
 
     # y: BatchSize x Time, c: BatchSize x Channels x Time
@@ -27,7 +38,7 @@ def train_one_step(model, optimizer, example, global_step, device):
         y = y.to(device)
         c = c.to(device)
     else:
-        y = example
+        y = example[0]
         y = y.to(device)
         c = None
 
@@ -36,16 +47,22 @@ def train_one_step(model, optimizer, example, global_step, device):
     x = torch.transpose(x, 2, 1)
 
     y_pred = model(x, c, None, False)
-    y_pred = y_pred.view(-1, n_classes)
-    y = y.view(-1)
+
+    # to get correct time order
+    y_pred = y_pred[:, :, :-1]
+    y = y[:, 1:]
 
     loss = loss_fn(y_pred, y)
+    current_lr = noam_learning_rate_decay(init_lr, global_step)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = current_lr
+
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
 
-    accuracy = torch.sum((torch.argmax(y_pred, dim=-1) == y).int()).float() / y.shape[0]
-    return {"loss": loss, "accuracy": accuracy}
+    accuracy = torch.mean((torch.argmax(y_pred, dim=1) == y).float())
+    return {"loss": loss.item(), "accuracy": accuracy.item(), 'lr': current_lr}
 
 
 def train(train_dataset,
@@ -53,6 +70,7 @@ def train(train_dataset,
           optimizer,
           device,
           train_one_step,
+          init_lr: int,
           epoch_seeds: List[int],
           global_step: int,
           n_epoches: int,
@@ -75,51 +93,56 @@ def train(train_dataset,
     Path(ckpt_dir).mkdir(exist_ok=True, parents=True)
     model.train(True)
 
-    for epoch in range((global_step // no_steps_per_epoch), n_epoches):
-        for metric in log_metrics:
-            metric.reset()
+    pbar = tqdm(initial=global_step,
+                total=n_epoches * no_steps_per_epoch,
+                desc='training')
 
-        set_seed(epoch_seeds[epoch + 1])
-
-        pbar = tqdm(initial=epoch * no_steps_per_epoch,
-                    total=n_epoches * no_steps_per_epoch,
-                    desc='training')
-        for train_example in train_dataset:
-            global_step += 1
-            pbar.update(1)
-
-            loss = train_one_step(model, optimizer, train_example, global_step, device)
-            # loss = model.loss(x, global_step)
-            # optimizer.zero_grad()
-            # loss['loss'].backward()
-            # optimizer.step()
-
-            # need to update metric
+    try:
+        for epoch in range((global_step // no_steps_per_epoch), n_epoches):
             for metric in log_metrics:
-                if metric.name in loss:
-                    metric.update(loss[metric.name].item())
+                metric.reset()
 
-            # logging
-            if global_step % log_freq == 0:
-                if train_history is not None:
-                    train_history.push(loss, global_step)
+            set_seed(epoch_seeds[epoch + 1])
+            for train_example in train_dataset:
+                global_step += 1
+                pbar.update(1)
 
-                info = {metric.name: metric.value for metric in log_metrics}
-                info['epoch'] = epoch
-                pbar.set_postfix(**info)
+                loss = train_one_step(model, optimizer, train_example, global_step, device, init_lr)
 
-        if (epoch + 1) % eval_freq == 0:
-            model.train(False)
-            eval_fn(model, global_step)
-            model.train(True)
+                # need to update metric
+                for metric in log_metrics:
+                    if metric.name in loss:
+                        metric.update(loss[metric.name])
 
-        if (epoch + 1) % save_freq == 0:
-            _tmp = Path(ckpt_dir) / f"step_{global_step:09}"
-            _tmp.mkdir(exist_ok=True)
-            save_checkpoint(model, optimizer, global_step, epoch_seeds, str(_tmp / "model.bin"))
+                # logging
+                if global_step % log_freq == 0:
+                    if train_history is not None:
+                        train_history.push(loss, global_step)
 
-        if (epoch + 1) % save_history_freq == 0 and train_history is not None:
-            train_history.flush(os.path.join(ckpt_dir, "history"), global_step)
+                    info = {metric.name: metric.value for metric in log_metrics}
+                    info['epoch'] = epoch
+                    pbar.set_postfix(**info)
+
+            if (epoch + 1) % eval_freq == 0:
+                model.train(False)
+                eval_fn(model, global_step)
+                model.train(True)
+
+            if (epoch + 1) % save_freq == 0:
+                _tmp = Path(ckpt_dir) / f"step_{global_step:09}"
+                _tmp.mkdir(exist_ok=True)
+                save_checkpoint(model, optimizer, global_step, epoch_seeds, str(_tmp / "model.bin"))
+
+            if (epoch + 1) % save_history_freq == 0 and train_history is not None:
+                train_history.flush(os.path.join(ckpt_dir, "history"), global_step)
+    finally:
+        print(">>> save model")
+        _tmp = Path(ckpt_dir) / f"step_{global_step:09}"
+        _tmp.mkdir(exist_ok=True)
+        save_checkpoint(model, optimizer, global_step, epoch_seeds, str(_tmp / "model.bin"))
+
+        print(">>> save train history")
+        train_history.flush(os.path.join(ckpt_dir, "history"), global_step)
 
     return global_step
 
@@ -150,15 +173,15 @@ def load_checkpoint(model, optim, file_path):
 
 
 class TrainHistory:
-    def __init__(self, names: List[str], scalar: List[str], scalars: List[str]):
-        self.measurements = {name: [] for name in names}
+    def __init__(self, scalar: List[str], scalars: List[str]):
+        self.measurements = {name: [] for name in chain(scalar, scalars) }
         self.scalar = scalar
         self.scalars = scalars
 
     def push(self, loss, global_step):
         for name in self.scalar:
             if name in loss:
-                self.add_scalar(name, loss[name].item(), global_step)
+                self.add_scalar(name, loss[name], global_step)
         for name in self.scalars:
             if name in loss:
                 self.add_scalars(name, loss[name].cpu().detach().numpy(), global_step)

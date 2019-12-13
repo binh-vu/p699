@@ -14,6 +14,7 @@ soundfile = "*"
 torch = "*"
 torchvision = "*"
 ujson = "*"
+pandas = "*"
 
 [requires]
 python_version = "3.7"

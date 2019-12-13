@@ -130,3 +130,5 @@ dmypy.json
 data
 src
 logdir
+jupyter_notebook_config.json
+ckpts

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 import librosa
-import numpy as np
+import numpy as np, pandas as pd
 from typing import *
 
 import ujson
@@ -20,22 +20,52 @@ class Postprocessing:
     def __init__(self):
         self.mel_basis = None
 
-    def create_metadata(self, npz_files: List[str], outfile: str):
+    def create_metadata(self, npz_files: List[str], track_metadata: str, outfile: str):
+        tracks = pd.read_csv(track_metadata, index_col=0, header=[0, 1])
+        keep_cols = [('set', 'split'),
+                     ('set', 'subset'), ('track', 'genre_top')]
+
+        df_all = tracks[keep_cols]
+        df_all = df_all[df_all[('set', 'subset')] == 'small']
+        df_all['track_id'] = df_all.index
+
+        dict_genres = {'Electronic': 1, 'Experimental': 2, 'Folk': 3, 'Hip-Hop': 4,
+                       'Instrumental': 5, 'International': 6, 'Pop': 7, 'Rock': 8}
+
+        df_train = df_all[df_all[('set', 'split')] == 'training']
+        df_valid = df_all[df_all[('set', 'split')] == 'validation']
+        df_test = df_all[df_all[('set', 'split')] == 'test']
+
+        track2genre = {}
+        for name, df in [('train', df_train), ('valid', df_valid), ('test', df_test)]:
+            track2genre[name] = {}
+            for idx, row in df.iterrows():
+                track_id = int(row['track_id'])
+                genre = str(row[('track', 'genre_top')])
+                track2genre[name][f"{track_id:06}.mp3"] = dict_genres[genre]
+
         indexes = {}
         for npz_file in tqdm(npz_files):
             data = np.load(npz_file, mmap_mode='r')
             assert data['audios'].shape[0] == data['audio_files'].shape[0]
-
+            npz_file_name = Path(npz_file).name
+            indexes[npz_file_name] = []
             for audio_file in data['audio_files']:
-                assert audio_file not in indexes
-                indexes[audio_file] = Path(npz_file).name
+                indexes[npz_file_name].append(Path(audio_file).name)
 
         with open(outfile, "w") as f:
-            ujson.dump(indexes, f)
+            ujson.dump({
+                "indexes": indexes,
+                "train": track2genre['train'],
+                "valid": track2genre['valid'],
+                "test": track2genre['test'],
+            }, f)
 
-    def process_audio_files(self, npz_files: List[str], metadata_file: str, output_dir: str, max_seconds: int, sample_rate: int,
+    def process_audio_files(self, npz_files: List[str], metadata_file: str, output_dir: str, max_seconds: int,
+                            sample_rate: int,
                             window_length_ms: int):
-        Path(output_dir).mkdir(exist_ok=True, parents=True)
+        for dname in ["spects", "audios", "quantized_audios"]:
+            (Path(output_dir) / dname).mkdir(exist_ok=True, parents=True)
 
         # 1024 if sample rate is 16k and window_length is 64ms
         n_fft = int(window_length_ms * sample_rate / 1000)
@@ -49,9 +79,9 @@ class Postprocessing:
         processed_npz_files = []
 
         with open(metadata_file, "r") as f:
-            n_songs = len(ujson.load(f))
+            metadata = ujson.load(f)
 
-        pbar = tqdm(total=n_songs, desc='process audios')
+        pbar = tqdm(total=sum(len(metadata[x]) for x in ['train', 'valid', 'test']), desc='process audios')
         for npz_file in npz_files:
             data = np.load(npz_file, mmap_mode='r')
             spects = []
@@ -89,8 +119,8 @@ class Postprocessing:
 
                 spects.append(spect)
                 mulaw_quantized.append(quanted_audio)
-                # padded_audios.append(padded_audio)
-                # break
+                padded_audios.append(padded_audio)
+
             processed_npz_files.append((spects, mulaw_quantized, padded_audios))
         pbar.close()
         print(">>> normalize spect")
@@ -107,8 +137,12 @@ class Postprocessing:
             spects = scaler.transform(spects)
             spects = spects.reshape(len(mulaw_quantized), -1, spects.shape[-1])
 
-            np.savez_compressed(os.path.join(output_dir, Path(npz_file).name), spects=spects,
-                                quantized_audios=mulaw_quantized)
+            npz_file_name = Path(npz_file).name
+            for i, song_name in enumerate(metadata['indexes'][npz_file_name]):
+                np.savez_compressed(os.path.join(output_dir, "spects", song_name.replace(".mp3", "")), value=spects[i])
+                np.savez_compressed(os.path.join(output_dir, "audios", song_name.replace(".mp3", "")), value=padded_audios[i])
+                np.savez_compressed(os.path.join(output_dir, "quantized_audios", song_name.replace(".mp3", "")),
+                                    value=mulaw_quantized[i])
 
     def logmelspectrogram(self, y, sample_rate, fft_size, hop_length, pad_mode='reflect'):
         # spect = librosa.feature.melspectrogram(y=audio, sr=sample_rate, n_fft=n_fft, hop_length=n_fft // 4)
@@ -131,6 +165,8 @@ if __name__ == "__main__":
     parser.add_argument("--npz_files",
                         "-i",
                         help="glob that find all npz files")
+    parser.add_argument("--track_file",
+                        help="track file that contains metadata about the songs")
     parser.add_argument("--sample_rate",
                         "-r",
                         type=int,
@@ -164,8 +200,9 @@ if __name__ == "__main__":
     processor = Postprocessing()
 
     if args.func == 'create_metadata':
-        processor.create_metadata(npz_files, args.output_metadata)
+        processor.create_metadata(npz_files, args.track_file, args.output_metadata)
     elif args.func == 'process_audios':
-        processor.process_audio_files(npz_files, args.output_metadata, args.output_dir, args.max_seconds, args.sample_rate, args.fft_size)
+        processor.process_audio_files(npz_files, args.output_metadata, args.output_dir, args.max_seconds,
+                                      args.sample_rate, args.fft_size)
     else:
         raise Exception("Invalid function: %s" % args.func)

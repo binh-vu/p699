@@ -12,7 +12,7 @@ def load_data(quantized_audio_files: List[str], spect_files: List[str], n_split=
         xspect = np.load(spect_file)['value']
         xquant = np.load(quant_file)['value']
 
-        assert Path(quant_file).name == Path(spect_file.name)
+        assert Path(quant_file).name == Path(spect_file).name
 
         if len(xspect.shape) > 2:
             time_dim = 1

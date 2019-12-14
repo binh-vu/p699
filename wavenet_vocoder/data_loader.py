@@ -1,5 +1,5 @@
 from typing import List
-
+from pathlib import Path
 import numpy as np, glob, torch
 from tqdm.auto import tqdm
 
@@ -12,23 +12,39 @@ def load_data(quantized_audio_files: List[str], spect_files: List[str], n_split=
         xspect = np.load(spect_file)['value']
         xquant = np.load(quant_file)['value']
 
+        assert Path(quant_file).name == Path(spect_file.name)
+
+        if len(xspect.shape) > 2:
+            time_dim = 1
+        else:
+            time_dim = 0
+
         if n_split > 1 and max_time_steps is None:
-            assert xspect.shape[0] % n_split == 0, f"{xspect.shape[0]} % {n_split} != 0"
-            spect_chunk_size = xspect.shape[0] // n_split
-            quant_chunk_size = xquant.shape[0] // n_split
+            assert xspect.shape[time_dim] % n_split == 0, f"{xspect.shape[time_dim]} % {n_split} != 0"
+            spect_chunk_size = xspect.shape[time_dim] // n_split
+            quant_chunk_size = xquant.shape[time_dim] // n_split
 
             for i in range(n_split):
-                xspect_chunk = xspect[i * spect_chunk_size:(i + 1) * spect_chunk_size]
-                xquant_chunk = xquant[i * quant_chunk_size:(i + 1) * quant_chunk_size]
+                if time_dim == 0:
+                    xspect_chunk = xspect[i * spect_chunk_size:(i + 1) * spect_chunk_size]
+                    xquant_chunk = xquant[i * quant_chunk_size:(i + 1) * quant_chunk_size]
+                else:
+                    xspect_chunk = xspect[:, i * spect_chunk_size:(i + 1) * spect_chunk_size]
+                    xquant_chunk = xquant[:, i * quant_chunk_size:(i + 1) * quant_chunk_size]
 
                 xspects.append(xspect_chunk)
                 xquants.append(xquant_chunk)
         elif max_time_steps is not None:
-            assert xquant.shape[0] % max_time_steps == 0, f"{xquant.shape[0]} % {max_time_steps} != 0"
-            n_reduce = xquant.shape[0] // max_time_steps
-            assert xspect.shape[0] % n_reduce == 0, f"{xspect.shape[0]} % {n_reduce} != 0"
-            xspects.append(xspect[:xspect.shape[0] // n_reduce])
-            xquants.append(xquant[:max_time_steps])
+            assert xquant.shape[time_dim] % max_time_steps == 0, f"{xquant.shape[time_dim]} % {max_time_steps} != 0"
+            n_reduce = xquant.shape[time_dim] // max_time_steps
+            assert xspect.shape[time_dim] % n_reduce == 0, f"{xspect.shape[time_dim]} % {n_reduce} != 0"
+
+            if time_dim == 0:
+                xspects.append(xspect[:xspect.shape[time_dim] // n_reduce])
+                xquants.append(xquant[:max_time_steps])
+            else:
+                xspects.append(xspect[:, :xspect.shape[time_dim] // n_reduce])
+                xquants.append(xquant[:, :max_time_steps])
         else:
             xspects.append(xspect)
             xquants.append(xquant)
@@ -36,8 +52,12 @@ def load_data(quantized_audio_files: List[str], spect_files: List[str], n_split=
         # if len(xquants) > 5:
         #     break
 
-    xspects = np.stack(xspects, axis=0)
-    xquants = np.stack(xquants, axis=0)
+    if time_dim == 0:
+        xspects = np.stack(xspects, axis=0)
+        xquants = np.stack(xquants, axis=0)
+    elif time_dim == 1:
+        xspects = np.concatenate(xspects, axis=0)
+        xquants = np.concatenate(xquants, axis=0)
 
     # local condition would be xspects
     # convert to torch and make it as BatchSize x Channel x Times

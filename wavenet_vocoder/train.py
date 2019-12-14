@@ -81,6 +81,7 @@ def train(train_dataset,
           eval_fn=None,
           save_freq: int = float('inf'),
           save_history_freq: int = float('inf'),
+          reset_metric_freq: int=None,
           log_freq: int = float('inf'),
           log_metrics: List[Any] = []):
     """
@@ -93,15 +94,15 @@ def train(train_dataset,
     Path(ckpt_dir).mkdir(exist_ok=True, parents=True)
     model.train(True)
 
+    if reset_metric_freq is None:
+        reset_metric_freq = no_steps_per_epoch
+
     pbar = tqdm(initial=global_step,
                 total=n_epoches * no_steps_per_epoch,
                 desc='training')
 
     try:
         for epoch in range((global_step // no_steps_per_epoch), n_epoches):
-            for metric in log_metrics:
-                metric.reset()
-
             set_seed(epoch_seeds[epoch + 1])
             for train_example in train_dataset:
                 global_step += 1
@@ -122,6 +123,11 @@ def train(train_dataset,
                     info = {metric.name: metric.value for metric in log_metrics}
                     info['epoch'] = epoch
                     pbar.set_postfix(**info)
+
+                # reset metric
+                if global_step % reset_metric_freq == 0:
+                    for metric in log_metrics:
+                        metric.reset()
 
             if (epoch + 1) % eval_freq == 0:
                 model.train(False)

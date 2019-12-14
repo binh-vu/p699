@@ -127,7 +127,7 @@ def main(metadata, data_dir, ckpt_dir):
                         ckpt_dir=str(ckpt_dir),
                         log_freq=2, log_metrics=[MeanMetric(x) for x in ['loss', 'accuracy', 'lr']],
                         train_history=TrainHistory(["loss", "accuracy", 'lr'], []),
-                        save_freq=1, save_history_freq=1)
+                        save_freq=1, save_history_freq=1, reset_metric_freq=120)
 
 
 if __name__ == '__main__':

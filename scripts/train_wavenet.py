@@ -1,6 +1,7 @@
 import argparse
 import glob
 import os
+from pathlib import Path
 
 import ujson
 
@@ -90,7 +91,7 @@ def get_model():
         scalar_input=is_scalar_input(hparams.input_type),
         output_distribution=hparams.output_distribution,
     )
-    print(model)
+    # print(model)
     return model
 
 
@@ -111,7 +112,7 @@ def main(metadata, data_dir, ckpt_dir):
     seeds = [random.randint(0, 1212) for i in range(10000)]
 
     assert os.path.exists(ckpt_dir)
-    ckpts = [x for x in ckpt_dir.iterdir() if x.name.startswith("step_")]
+    ckpts = [x for x in Path(ckpt_dir).iterdir() if x.name.startswith("step_")]
     if len(ckpts) > 0:
         last_ckpt = max(ckpts, key=lambda x: int(x.name.replace("step_", "")))
         print(">>> restore last checkpoint", last_ckpt.name)

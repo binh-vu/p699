@@ -94,7 +94,7 @@ def get_model():
     return model
 
 
-def main(metadata, data_dir):
+def main(metadata, data_dir, ckpt_dir):
     quant_files = sorted(glob.glob(os.path.join(data_dir, "quantized_audios", "*.npz")))
     spect_files = sorted(glob.glob(os.path.join(data_dir, "spects", "*.npz")))
     assert len(quant_files) > 0
@@ -110,7 +110,7 @@ def main(metadata, data_dir):
     random.seed(1212)
     seeds = [random.randint(0, 1212) for i in range(10000)]
 
-    ckpt_dir = ROOT_DIR / "ckpts" / "wavenet"
+    assert os.path.exists(ckpt_dir)
     ckpts = [x for x in ckpt_dir.iterdir() if x.name.startswith("step_")]
     if len(ckpts) > 0:
         last_ckpt = max(ckpts, key=lambda x: int(x.name.replace("step_", "")))
@@ -139,9 +139,13 @@ if __name__ == '__main__':
                         "-i",
                         required=True,
                         help="dataset directory")
+    parser.add_argument("--ckpt_dir",
+                        "-c",
+                        required=True,
+                        help="dataset directory")
     args = parser.parse_args()
 
     with open(args.metadata, "r") as f:
         metadata = ujson.load(f)
 
-    main(metadata, args.data_dir)
+    main(metadata, args.data_dir, args.ckpt_dir)
